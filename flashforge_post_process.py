@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import re
 import sys
@@ -31,14 +33,11 @@ def fix_max_z_speed(input_gcode_file_path: Path) -> Path:
                 valid_gcode_match = LINE_REGEX.match(line)
                 gcode = valid_gcode_match.group('gcode')
                 if G1_match := G1_REGEX.match(gcode):
-                    print(f'line: {G1_match.string}')
                     if F_match := F_REGEX.search(gcode):
                         last_travel_speed = F_match.group(0)
-                        print(f'last_travel_speed: {last_travel_speed}')
 
                     if Z_match := Z_REGEX.search(gcode):
                         output_line_modified = True
-                        print(f'Z_match: {Z_match.string}')
 
                         gcode_comment = valid_gcode_match.group('comment')
                         if gcode_comment is None:
@@ -58,6 +57,7 @@ def fix_max_z_speed(input_gcode_file_path: Path) -> Path:
 
     return output_gcode_file_path
 
+# todo strip out heating code if one side doesn't have any extrude commands
 
 def validate_and_convert(input_gcode_file_path: Path):
     copyfile(src=input_gcode_file_path, dst=input_gcode_file_path.with_suffix('.g'))
