@@ -61,7 +61,7 @@ def fix_max_z_speed(input_gcode_file_path: Path) -> Path:
 
 def validate_and_convert(input_gcode_file_path: Path):
     copyfile(src=input_gcode_file_path, dst=input_gcode_file_path.with_suffix('.g'))
-    # Post processed max file name
+    # TODO: Shorten name when longer than allowed by flashprint for "send gcode to printer"(35 bytes?)
 
 
 def main(input_gcode_file_path: Path):
