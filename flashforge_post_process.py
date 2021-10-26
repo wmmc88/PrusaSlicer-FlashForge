@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -10,43 +11,63 @@ from typing import TextIO
 THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 
 DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
-print(DESTINATION_FILE_PATH)
+
+# Commented Gcode lines need to be processed too because of FF firmware parsing
+LINE_REGEX = re.compile(r'(?P<gcode>[;:\s]*(\s*\b[GMXYZFE]\d+(\.\d+)?\b)*)(?P<comment>\s*;.*)*', re.ASCII)
+M109_REGEX = re.compile(r'[;:\s]*\bM109\b', re.ASCII)
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
 POST_PROCESSED_FILE_PREFIX = 'FFpp_'
 FAILED_PROCESSING_PREFIX = f'{POST_PROCESSED_FILE_PREFIX}FAILED_'
 
-
-def add_header(gcode: io.StringIO, input_file_path: Path) -> None:
-    with io.StringIO() as input_gcode:
-        gcode.seek(0)
-        shutil.copyfileobj(fsrc=gcode, fdst=input_gcode)
-
-        # add header
-        gcode.seek(0)
-        gcode.write(f'; This file has been post-processed by {THIS_FILE_ABS_PATH}\n')
-        gcode.write(f'; Original File Location: {input_file_path}\n')
-        gcode.write('\n\n')
-
-        # copy rest of file
-        gcode.write(input_gcode.getvalue())
+END_OF_START_CODE_DELIMITER = '; **** End of Start GCode: FlashForge Creator 3 ****'
 
 
-def add_filament_specific_z_offset_to_starting_code(gcode: io.StringIO) -> None:
+def add_header(gcode: io.StringIO, input_file_path: Path) -> io.StringIO:
+    new_gcode = io.StringIO()
+
+    # add header
+    new_gcode.write(f'; This file has been post-processed by {THIS_FILE_ABS_PATH}\n')
+    new_gcode.write(f'; Original File Location: {input_file_path}\n')
+    new_gcode.write('\n\n')
+
+    # copy rest of file
+    gcode.seek(0)
+    new_gcode.write(gcode.getvalue())
+
+    return new_gcode
+
+
+def add_filament_specific_z_offset_to_starting_code(gcode: io.StringIO) -> io.StringIO:
     # TODO: extract z offset from filament specific code and add to start code
-    pass
+    return gcode
 
 
-def remove_standard_m109_commands(gcode: io.StringIO) -> None:
+def remove_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
     """
     M109 in FF firmware is used to indicate printing mode(normal, mirror, duplicate) instead of the standard gcode command for "set temperature and wait"
     """
-    pass
+    new_gcode = io.StringIO()
+
+    gcode.seek(0)
+    after_start_code = False
+    for line in gcode:
+        if after_start_code:
+            valid_gcode_match = LINE_REGEX.match(line)
+            gcode_str_match = valid_gcode_match.group('gcode')
+            if not M109_REGEX.match(gcode_str_match):
+                new_gcode.write(line)
+        else:
+            new_gcode.write(line)
+            if END_OF_START_CODE_DELIMITER in line:
+                after_start_code = True
+
+    return new_gcode
 
 
-def disable_heating_if_extruder_unused(gcode: io.StringIO) -> None:
+def disable_heating_if_extruder_unused(gcode: io.StringIO) -> io.StringIO:
     # TODO: strip out heating code if one side doesn't have any extrude commands
-    pass
+    return gcode
 
 
 def is_processed_gcode_valid(gcode: io.StringIO) -> bool:
@@ -74,10 +95,10 @@ def main(input_file_path: Path):
             unprocessed_gcode.seek(0)
             shutil.copyfileobj(fsrc=unprocessed_gcode, fdst=processed_gcode)
 
-            add_header(processed_gcode, input_file_path)
-            add_filament_specific_z_offset_to_starting_code(processed_gcode)
-            remove_standard_m109_commands(processed_gcode)
-            disable_heating_if_extruder_unused(processed_gcode)
+            processed_gcode = add_header(processed_gcode, input_file_path)
+            processed_gcode = add_filament_specific_z_offset_to_starting_code(processed_gcode)
+            processed_gcode = remove_standard_m109_commands(processed_gcode)
+            processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
 
             if is_processed_gcode_valid(processed_gcode):
                 gcode_file_path = DESTINATION_FILE_PATH.parent / (
