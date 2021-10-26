@@ -1,72 +1,99 @@
 #!/usr/bin/env python3
 
+import io
 import os
-import re
+import shutil
 import sys
 from pathlib import Path
-from shutil import copyfile
+from typing import TextIO
 
 THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 
-Z_FEEDRATE = float(os.environ['SLIC3R_MACHINE_MAX_FEEDRATE_Z'].split(',')[0]) * 60
-XY_TRAVEL_SPEED = float(os.environ['SLIC3R_TRAVEL_SPEED']) * 60
+DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
+print(DESTINATION_FILE_PATH)
 
-LINE_REGEX = re.compile(r'(?P<gcode>[;:\s]*(\s*\b[GMXYZFE]\d+(\.\d+)?\b)*)(?P<comment>\s*;.*)*', re.ASCII)
-G1_REGEX = re.compile(r'[;:\s]*\bG1\b', re.ASCII)
-F_REGEX = re.compile(r'\s*F\d+(\.\d+)?\b', re.ASCII)
-Z_REGEX = re.compile(r'\s*Z\d+(\.\d+)?\b', re.ASCII)
-
-
-def fix_max_z_speed(input_gcode_file_path: Path) -> Path:
-    output_gcode_file_path = input_gcode_file_path.parent / (
-            input_gcode_file_path.stem + "_fix-max-z-speed" + input_gcode_file_path.suffix)
-    with open(output_gcode_file_path, mode='wt') as gcode_output:
-        gcode_output.write(
-            f'This file has been post-processed by {THIS_FILE_ABS_PATH}\n' + f'Original File Location: {input_gcode_file_path}\n\n\n')
-
-        with open(input_gcode_file_path, mode='rt') as gcode_input:
-
-            last_travel_speed = " F" + str(XY_TRAVEL_SPEED)
-            for line in gcode_input:
-                output_line_modified = False
-
-                valid_gcode_match = LINE_REGEX.match(line)
-                gcode = valid_gcode_match.group('gcode')
-                if G1_match := G1_REGEX.match(gcode):
-                    if F_match := F_REGEX.search(gcode):
-                        last_travel_speed = F_match.group(0)
-
-                    if Z_match := Z_REGEX.search(gcode):
-                        output_line_modified = True
-
-                        gcode_comment = valid_gcode_match.group('comment')
-                        if gcode_comment is None:
-                            gcode_comment = ''
-
-                        z_line = G1_match.group(0) + Z_match.group(0) + f' F{Z_FEEDRATE}{gcode_comment}\n'
-                        gcode_output.write(z_line)
-
-                        reset_F_line = G1_match.group(
-                            0) + last_travel_speed + ' ; reset to previous feedrate before z-move\n'
-                        gcode_output.write(reset_F_line)
-
-                        # TODO: handle if there's X/Y/E command too
-
-                if not output_line_modified:
-                    gcode_output.write(line)
-
-    return output_gcode_file_path
-
-# todo strip out heating code if one side doesn't have any extrude commands
-
-def validate_and_convert(input_gcode_file_path: Path):
-    copyfile(src=input_gcode_file_path, dst=input_gcode_file_path.with_suffix('.g'))
-    # TODO: Shorten name when longer than allowed by flashprint for "send gcode to printer"(35 bytes?)
+FLASHPRINT_FILE_NAME_LIMIT = 36
+POST_PROCESSED_FILE_PREFIX = 'FFpp_'
+FAILED_PROCESSING_PREFIX = f'{POST_PROCESSED_FILE_PREFIX}FAILED_'
 
 
-def main(input_gcode_file_path: Path):
-    output_gcode_file_path = fix_max_z_speed(input_gcode_file_path)
-    validate_and_convert(output_gcode_file_path)
+def add_header(gcode: io.StringIO, input_file_path: Path) -> None:
+    with io.StringIO() as input_gcode:
+        gcode.seek(0)
+        shutil.copyfileobj(fsrc=gcode, fdst=input_gcode)
+
+        # add header
+        gcode.seek(0)
+        gcode.write(f'; This file has been post-processed by {THIS_FILE_ABS_PATH}\n')
+        gcode.write(f'; Original File Location: {input_file_path}\n')
+        gcode.write('\n\n')
+
+        # copy rest of file
+        gcode.write(input_gcode.getvalue())
+
+
+def add_filament_specific_z_offset_to_starting_code(gcode: io.StringIO) -> None:
+    # TODO: extract z offset from filament specific code and add to start code
+    pass
+
+
+def remove_standard_m109_commands(gcode: io.StringIO) -> None:
+    """
+    M109 in FF firmware is used to indicate printing mode(normal, mirror, duplicate) instead of the standard gcode command for "set temperature and wait"
+    """
+    pass
+
+
+def disable_heating_if_extruder_unused(gcode: io.StringIO) -> None:
+    # TODO: strip out heating code if one side doesn't have any extrude commands
+    pass
+
+
+def is_processed_gcode_valid(gcode: io.StringIO) -> bool:
+    # TODO: Put some validation to make sure the post processing steps actually worked
+    return True
+
+
+def shorten_file_name(gcode_file_path: Path) -> Path:
+    new_file_path_stem = gcode_file_path.stem[
+                         :FLASHPRINT_FILE_NAME_LIMIT - len(gcode_file_path.stem) - len(gcode_file_path.suffix)]
+    new_file_path = gcode_file_path.parent / (new_file_path_stem + gcode_file_path.suffix)
+    assert (len(new_file_path.name) <= FLASHPRINT_FILE_NAME_LIMIT)
+    return new_file_path
+
+
+def write_gcode_to_file(gcode: TextIO, file_path: Path) -> None:
+    with open(file_path, mode='wt') as output_file:
+        gcode.seek(0)
+        shutil.copyfileobj(fsrc=gcode, fdst=output_file)
+
+
+def main(input_file_path: Path):
+    with open(input_file_path, mode='rt') as unprocessed_gcode:
+        with io.StringIO() as processed_gcode:
+            unprocessed_gcode.seek(0)
+            shutil.copyfileobj(fsrc=unprocessed_gcode, fdst=processed_gcode)
+
+            add_header(processed_gcode, input_file_path)
+            add_filament_specific_z_offset_to_starting_code(processed_gcode)
+            remove_standard_m109_commands(processed_gcode)
+            disable_heating_if_extruder_unused(processed_gcode)
+
+            if is_processed_gcode_valid(processed_gcode):
+                gcode_file_path = DESTINATION_FILE_PATH.parent / (
+                        POST_PROCESSED_FILE_PREFIX + DESTINATION_FILE_PATH.stem + '.g')
+                if len(gcode_file_path.name) > FLASHPRINT_FILE_NAME_LIMIT:
+                    gcode_file_path = shorten_file_name(gcode_file_path)
+                print('Post-processing completed and gcode passed validation checks!')
+            else:
+                gcode_file_path = DESTINATION_FILE_PATH.parent / (
+                        FAILED_PROCESSING_PREFIX + DESTINATION_FILE_PATH.stem + '.g')
+                print('Post-processing failed validation checks!')
+
+            write_gcode_to_file(processed_gcode, gcode_file_path)
+            print(f'File available at: {gcode_file_path}')
+
+    input('Press Any Key to Exit...')
 
 
 if __name__ == '__main__':
