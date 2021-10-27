@@ -14,9 +14,9 @@ DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
 
 # Commented Gcode lines need to be processed too because of FF firmware parsing
 GCODE_LINE_REGEX = re.compile(
-    r'(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFE]\d+(\.\d+)?\b)(\s+\b[GMXYZFE]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)',
+    r'\A(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFE]\d+(\.\d+)?\b)(\s+\b[GMXYZFEST]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)?',
     re.ASCII)
-M109_COMMAND_REGEX = re.compile(r'\bM109\b(?P<temperature_param>\bS\d+(\.\d+)?\b)\s+(?P<extruder_param>\bT\d+\b)\s+',
+M109_COMMAND_REGEX = re.compile(r'\A\bM109\b\s+(?P<temperature_param>\bS\d+(\.\d+)?\b)\s+(?P<extruder_param>\bT\d+\b)',
                                 re.ASCII)
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
@@ -54,14 +54,13 @@ def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
 
     gcode.seek(0)
     for line in gcode:
-
         if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
             gcode_str_match = valid_gcode_line_match.group('gcode')
             if M109_command_match := M109_COMMAND_REGEX.match(gcode_str_match):
                 new_gcode.write(
-                    f'M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature\n')
+                    f'{valid_gcode_line_match.group("line_prefix")}M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature\n')
                 new_gcode.write(
-                    f'M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached\n')
+                    f'{valid_gcode_line_match.group("line_prefix")}M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached\n')
             else:
                 new_gcode.write(line)
         else:
