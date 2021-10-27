@@ -13,14 +13,15 @@ THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
 
 # Commented Gcode lines need to be processed too because of FF firmware parsing
-LINE_REGEX = re.compile(r'(?P<gcode>[;:\s]*(\s*\b[GMXYZFE]\d+(\.\d+)?\b)*)(?P<comment>\s*;.*)*', re.ASCII)
-M109_REGEX = re.compile(r'[;:\s]*\bM109\b', re.ASCII)
+GCODE_LINE_REGEX = re.compile(
+    r'(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFE]\d+(\.\d+)?\b)(\s+\b[GMXYZFE]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)',
+    re.ASCII)
+M109_COMMAND_REGEX = re.compile(r'\bM109\b(?P<temperature_param>\bS\d+(\.\d+)?\b)\s+(?P<extruder_param>\bT\d+\b)\s+',
+                                re.ASCII)
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
 POST_PROCESSED_FILE_PREFIX = 'FFpp_'
 FAILED_PROCESSING_PREFIX = f'{POST_PROCESSED_FILE_PREFIX}FAILED_'
-
-END_OF_START_CODE_DELIMITER = '; **** End of Start GCode: FlashForge Creator 3 ****'
 
 
 def add_header(gcode: io.StringIO, input_file_path: Path) -> io.StringIO:
@@ -43,24 +44,28 @@ def add_filament_specific_z_offset_to_starting_code(gcode: io.StringIO) -> io.St
     return gcode
 
 
-def remove_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
+def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
     """
-    M109 in FF firmware is used to indicate printing mode(normal, mirror, duplicate) instead of the standard gcode command for "set temperature and wait"
+    The standard M109 gcode command is to set extruder temperature and and wait until it reaches it. In FF firmware,
+    M109 is used to indicate printing mode(normal, mirror, duplicate). All standard M109 commands must be converted
+    to a M104 and a M6 command.
     """
     new_gcode = io.StringIO()
 
     gcode.seek(0)
-    after_start_code = False
     for line in gcode:
-        if after_start_code:
-            valid_gcode_match = LINE_REGEX.match(line)
-            gcode_str_match = valid_gcode_match.group('gcode')
-            if not M109_REGEX.match(gcode_str_match):
+
+        if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
+            gcode_str_match = valid_gcode_line_match.group('gcode')
+            if M109_command_match := M109_COMMAND_REGEX.match(gcode_str_match):
+                new_gcode.write(
+                    f'M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature\n')
+                new_gcode.write(
+                    f'M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached\n')
+            else:
                 new_gcode.write(line)
         else:
             new_gcode.write(line)
-            if END_OF_START_CODE_DELIMITER in line:
-                after_start_code = True
 
     return new_gcode
 
@@ -97,7 +102,7 @@ def main(input_file_path: Path):
 
             processed_gcode = add_header(processed_gcode, input_file_path)
             processed_gcode = add_filament_specific_z_offset_to_starting_code(processed_gcode)
-            processed_gcode = remove_standard_m109_commands(processed_gcode)
+            processed_gcode = replace_standard_m109_commands(processed_gcode)
             processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
 
             if is_processed_gcode_valid(processed_gcode):
