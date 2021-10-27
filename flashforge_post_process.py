@@ -14,10 +14,11 @@ DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
 
 # Commented Gcode lines need to be processed too because of FF firmware parsing
 GCODE_LINE_REGEX = re.compile(
-    r'\A(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFE]\d+(\.\d+)?\b)(\s+\b[GMXYZFEST]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)?',
+    r'\A(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFET]\d+(\.\d+)?\b)(\s+\b[GMXYZFEST]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)?',
     re.ASCII)
 M109_COMMAND_REGEX = re.compile(r'\A\bM109\b\s+(?P<temperature_param>\bS\d+(\.\d+)?\b)\s+(?P<extruder_param>\bT\d+\b)',
                                 re.ASCII)
+T_COMMAND_REGEX = re.compile(r'\A\bT\d+\b', re.ASCII)
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
 POST_PROCESSED_FILE_PREFIX = 'FFpp_'
@@ -69,6 +70,26 @@ def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
     return new_gcode
 
 
+def remove_useless_T_commands(gcode: io.StringIO) -> io.StringIO:
+    """
+    PrusaSlicer puts T{extruder_number} commands to switch the active extruder. These don't do anything on FF
+    firmware and just bloat the generated gcode. On FF Firmware, extruder switches are handled by M108 and those are
+    added by the toolchange_gcode feature of the Creator3 PrusaSlicer printer profile.
+    """
+    new_gcode = io.StringIO()
+
+    gcode.seek(0)
+    for line in gcode:
+        if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
+            gcode_str_match = valid_gcode_line_match.group('gcode')
+            if not T_COMMAND_REGEX.match(gcode_str_match):
+                new_gcode.write(line)
+        else:
+            new_gcode.write(line)
+
+    return new_gcode
+
+
 def disable_heating_if_extruder_unused(gcode: io.StringIO) -> io.StringIO:
     # TODO: strip out heating code if one side doesn't have any extrude commands
     return gcode
@@ -102,6 +123,7 @@ def main(input_file_path: Path):
             processed_gcode = add_header(processed_gcode, input_file_path)
             processed_gcode = add_filament_specific_z_offset_to_starting_code(processed_gcode)
             processed_gcode = replace_standard_m109_commands(processed_gcode)
+            processed_gcode = remove_useless_T_commands(processed_gcode)
             processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
 
             if is_processed_gcode_valid(processed_gcode):
