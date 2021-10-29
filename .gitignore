@@ -1,2 +1,3 @@
 # Jetbrains ide config
 /.idea/
+/tests/data/FFpp_*
