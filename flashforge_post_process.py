@@ -11,13 +11,28 @@ from typing import TextIO
 THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 
 DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
+TRAVEL_SPEED = float(os.environ['SLIC3R_TRAVEL_SPEED']) * 60
+TRAVEL_SPEED_Z = float(os.environ['SLIC3R_TRAVEL_SPEED_Z']) * 60
 
 # Commented Gcode lines need to be processed too because of FF firmware parsing
 GCODE_LINE_REGEX = re.compile(
-    r'\A(?P<line_prefix>[;:\s]*)(?P<gcode>(\b[GMXYZFET]\d+(\.\d+)?\b)(\s+\b[GMXYZFEST]\d+(\.\d+)?\b)*\s*)(?P<comment>;.*)?',
+    r'\A(?P<line_prefix>[;:\s]*)'
+    r'(?P<gcode>(\b[GMT]\d+(\.\d+)?\b)(\s+\b[XYZE]-?\d*\.?\d+\b)*(\s+\b[FST]\d*\.?\d+\b)*\s*)'
+    r'(?P<comment>;.*)?',
     re.ASCII)
-M109_COMMAND_REGEX = re.compile(r'\A\bM109\b\s+(?P<temperature_param>\bS\d+(\.\d+)?\b)\s+(?P<extruder_param>\bT\d+\b)',
-                                re.ASCII)
+M109_COMMAND_REGEX = re.compile(
+    r'\A\bM109\b\s+'
+    r'(?P<temperature_param>\bS-?\d*\.?\d+\b)\s+'
+    r'(?P<extruder_param>\bT\d+\b)',
+    re.ASCII)
+G1_COMMAND_REGEX = re.compile(
+    r'\A\bG1\b\s+'
+    r'(?P<xy_params>(\b[XY]-?\d*\.?\d+\b\s*)*)'
+    r'(?P<z_param>(\b[Z]-?\d*\.?\d+\b\s*)*)'
+    r'(?P<e_param>(\b[E]-?\d*\.?\d+\b\s*)*)'
+    r'(?P<f_param>(\b[F]\d*\.?\d+\b\s*)*)'
+    r'(?P<comment>;.*)?',
+    re.ASCII)
 T_COMMAND_REGEX = re.compile(r'\A\bT\d+\b', re.ASCII)
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
@@ -54,17 +69,40 @@ def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
     new_gcode = io.StringIO()
 
     gcode.seek(0)
+    fix_next_G1_speed = False
     for line in gcode:
+        line_written = False
         if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
-            gcode_str_match = valid_gcode_line_match.group('gcode')
-            if M109_command_match := M109_COMMAND_REGEX.match(gcode_str_match):
+            gcode_match_str = valid_gcode_line_match.group('gcode')
+            if M109_command_match := M109_COMMAND_REGEX.match(gcode_match_str):
                 new_gcode.write(
                     f'{valid_gcode_line_match.group("line_prefix")}M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature\n')
                 new_gcode.write(
                     f'{valid_gcode_line_match.group("line_prefix")}M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached\n')
-            else:
-                new_gcode.write(line)
-        else:
+                line_written = True
+                fix_next_G1_speed = True
+            elif fix_next_G1_speed and (G1_command_match := G1_COMMAND_REGEX.match(gcode_match_str)):
+                if G1_command_match.group('f_param'):
+                    fix_next_G1_speed = False  # No need to fix next speed since it already has Feed Rate parameter
+                elif G1_command_match.group('xy_params') or G1_command_match.group('z_param'):
+                    if G1_command_match.group('xy_params'):
+                        travel_speed = TRAVEL_SPEED
+                    elif G1_command_match.group('z_param'):
+                        travel_speed = TRAVEL_SPEED_Z
+                    else:
+                        raise
+
+                    if gcode_comment := valid_gcode_line_match.group("comment"):
+                        gcode_comment = f' {gcode_comment}'
+                    else:
+                        gcode_comment = ''
+
+                    new_gcode.write(
+                        f'{valid_gcode_line_match.group("line_prefix")}{valid_gcode_line_match.group("gcode")} F{travel_speed}{gcode_comment}\n')
+                    line_written = True
+                    fix_next_G1_speed = False
+
+        if not line_written:
             new_gcode.write(line)
 
     return new_gcode
@@ -81,8 +119,8 @@ def remove_useless_T_commands(gcode: io.StringIO) -> io.StringIO:
     gcode.seek(0)
     for line in gcode:
         if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
-            gcode_str_match = valid_gcode_line_match.group('gcode')
-            if not T_COMMAND_REGEX.match(gcode_str_match):
+            gcode_match_str = valid_gcode_line_match.group('gcode')
+            if not T_COMMAND_REGEX.match(gcode_match_str):
                 new_gcode.write(line)
         else:
             new_gcode.write(line)
@@ -140,8 +178,8 @@ def main(input_file_path: Path):
             write_gcode_to_file(processed_gcode, gcode_file_path)
             print(f'File available at: {gcode_file_path}')
 
-    input('Press Any Key to Exit...')
 
 
 if __name__ == '__main__':
     main(Path(sys.argv[1]).resolve(strict=True))
+    input('Press Any Key to Exit...')
