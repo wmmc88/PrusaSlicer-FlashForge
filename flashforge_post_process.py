@@ -42,7 +42,7 @@ FFPP_PARSED_LINE_REGEX = re.compile(
     r'(?P<comment>\s*;.*)?',
     re.ASCII)
 FFPP_SUBSTITUTION_LINE_REGEX = re.compile(
-    r'(?P<line_prefix>\A;.*)'
+    r'(?P<line_prefix>\A.*)'
     r'<FFPP-(?P<is_calculated_substitution>calculated-)?'
     r'(?P<substitution_value_name>(\w*\b))>'
     r'(?P<line_suffix>.*)',
