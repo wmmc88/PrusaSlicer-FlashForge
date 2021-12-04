@@ -6,7 +6,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, Dict, List
 
 THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 
@@ -14,9 +14,8 @@ DESTINATION_FILE_PATH = Path(os.environ['SLIC3R_PP_OUTPUT_NAME'])
 TRAVEL_SPEED = float(os.environ['SLIC3R_TRAVEL_SPEED']) * 60
 TRAVEL_SPEED_Z = float(os.environ['SLIC3R_TRAVEL_SPEED_Z']) * 60
 
-# Commented Gcode lines need to be processed too because of FF firmware parsing
 GCODE_LINE_REGEX = re.compile(
-    r'\A(?P<line_prefix>[;:\s]*)'
+    r'\A(?P<line_prefix>[;:\s]*)'  # Commented Gcode lines need to be processed too because of FF firmware parsing
     r'(?P<gcode>(\b[GMT]\d+(\.\d+)?\b)(\s+\b[XYZE]-?\d*\.?\d+\b)*(\s+\b[FST]\d*\.?\d+\b)*\s*)'
     r'(?P<comment>;.*)?',
     re.ASCII)
@@ -35,9 +34,26 @@ G1_COMMAND_REGEX = re.compile(
     re.ASCII)
 T_COMMAND_REGEX = re.compile(r'\A\bT\d+\b', re.ASCII)
 
+FFPP_PARSED_LINE_REGEX = re.compile(
+    r'\A;\s*\bFFPP-'
+    r'(?P<parsed_value_name>(\w*\b))'
+    r':\s*'
+    r'(?P<parsed_value>\b\d*.?\d*\b)'
+    r'(?P<comment>\s*;.*)?',
+    re.ASCII)
+FFPP_SUBSTITUTION_LINE_REGEX = re.compile(
+    r'(?P<line_prefix>\A;.*)'
+    r'<FFPP-(?P<is_calculated_substitution>calculated-)?'
+    r'(?P<substitution_value_name>(\w*\b))>'
+    r'(?P<line_suffix>.*)',
+    re.ASCII)
+FFPP_PARSED_VALUES: Dict[str, List] = {}
+
 FLASHPRINT_FILE_NAME_LIMIT = 36
 POST_PROCESSED_FILE_PREFIX = 'FFpp_'
 FAILED_PROCESSING_PREFIX = f'{POST_PROCESSED_FILE_PREFIX}FAILED_'
+
+PRUSASLICER_CONFIG_START_LINE_REGEX = re.compile(r'\A; prusaslicer_config = begin', re.ASCII)
 
 
 def add_header(gcode: io.StringIO, input_file_path: Path) -> io.StringIO:
@@ -55,9 +71,58 @@ def add_header(gcode: io.StringIO, input_file_path: Path) -> io.StringIO:
     return new_gcode
 
 
-def add_filament_specific_z_offset_to_starting_code(gcode: io.StringIO) -> io.StringIO:
-    # TODO: extract z offset from filament specific code and add to start code
+def parse_for_ffpp_values(gcode: io.StringIO) -> io.StringIO:
+    gcode.seek(0)
+    for line in gcode:
+        if parsing_line_match := FFPP_PARSED_LINE_REGEX.match(line):
+            parsed_value_name = parsing_line_match.group('parsed_value_name')
+            parsed_value = parsing_line_match.group('parsed_value')
+            if parsed_value_name in FFPP_PARSED_VALUES:
+                FFPP_PARSED_VALUES[parsed_value_name].append(parsed_value)
+            else:
+                FFPP_PARSED_VALUES[parsed_value_name] = [parsed_value]
     return gcode
+
+
+def substitute_ffpp_values(gcode: io.StringIO) -> io.StringIO:
+    new_gcode = io.StringIO()
+
+    gcode.seek(0)
+    current_layer_num = 0
+    reached_prusaslicer_config = False
+    for line in gcode:
+        if PRUSASLICER_CONFIG_START_LINE_REGEX.match(line):
+            reached_prusaslicer_config = True
+
+        if not reached_prusaslicer_config and (substitution_line_match := FFPP_SUBSTITUTION_LINE_REGEX.match(line)):
+            substitution_value_name = substitution_line_match.group('substitution_value_name')
+            if substitution_line_match.group('is_calculated_substitution'):
+                match substitution_value_name:
+                    case 'total_layer_count':
+                        content = len(FFPP_PARSED_VALUES['layer_z_height'])
+                    case 'next_layer_height':
+                        prev_layer_z = 0 if current_layer_num == 0 \
+                            else float(FFPP_PARSED_VALUES['layer_z_height'][current_layer_num - 1])
+                        content = f'{float(FFPP_PARSED_VALUES["layer_z_height"][current_layer_num]) - prev_layer_z:.3f}'
+                        current_layer_num += 1
+                    case _:
+                        raise NotImplementedError(f'Calculation of {substitution_value_name} is not implemented.')
+            else:
+                first_val = FFPP_PARSED_VALUES[substitution_value_name][0]
+                for val in FFPP_PARSED_VALUES[substitution_value_name]:
+                    # If a non-calculated value is parsed several times in the file, all the values must be the same
+                    if val != first_val:
+                        raise RuntimeError(
+                            'Every instance of FFPP-{substitution_value_name} in input file do not have equivalent values.')
+                    assert (val == first_val)
+                content = first_val
+
+            new_gcode.write(
+                f'{substitution_line_match.group("line_prefix")}{content}{substitution_line_match.group("line_suffix")}\n')
+        else:
+            new_gcode.write(line)
+
+    return new_gcode
 
 
 def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
@@ -90,7 +155,9 @@ def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
                     elif G1_command_match.group('z_param'):
                         travel_speed = TRAVEL_SPEED_Z
                     else:
-                        raise
+                        raise RuntimeError(
+                            'Error in G1_COMMAND_REGEX. Expected X, Y or Z command because of regex match'
+                            'groups, but could not find one.')
 
                     if gcode_comment := valid_gcode_line_match.group("comment"):
                         gcode_comment = f' {gcode_comment}'
@@ -142,7 +209,10 @@ def shorten_file_name(gcode_file_path: Path) -> Path:
     new_file_path_stem = gcode_file_path.stem[
                          :FLASHPRINT_FILE_NAME_LIMIT - len(gcode_file_path.stem) - len(gcode_file_path.suffix)]
     new_file_path = gcode_file_path.parent / (new_file_path_stem + gcode_file_path.suffix)
-    assert (len(new_file_path.name) <= FLASHPRINT_FILE_NAME_LIMIT)
+    if len(new_file_path.name) > FLASHPRINT_FILE_NAME_LIMIT:
+        raise RuntimeError(
+            f'Failed to shorten name below {FLASHPRINT_FILE_NAME_LIMIT} bytes (FLASHPRINT_FILE_NAME_LIMIT)')
+
     return new_file_path
 
 
@@ -159,7 +229,8 @@ def main(input_file_path: Path):
             shutil.copyfileobj(fsrc=unprocessed_gcode, fdst=processed_gcode)
 
             processed_gcode = add_header(processed_gcode, input_file_path)
-            processed_gcode = add_filament_specific_z_offset_to_starting_code(processed_gcode)
+            processed_gcode = parse_for_ffpp_values(processed_gcode)
+            processed_gcode = substitute_ffpp_values(processed_gcode)
             processed_gcode = replace_standard_m109_commands(processed_gcode)
             processed_gcode = remove_useless_T_commands(processed_gcode)
             processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
@@ -177,7 +248,6 @@ def main(input_file_path: Path):
 
             write_gcode_to_file(processed_gcode, gcode_file_path)
             print(f'File available at: {gcode_file_path}')
-
 
 
 if __name__ == '__main__':
