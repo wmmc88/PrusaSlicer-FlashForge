@@ -1,0 +1,33 @@
+name: pytest
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+  schedule: # Trigger a job on master at midnight UTC every day
+    - cron: '0 0 * * *'
+
+jobs:
+  pytest:
+    name: Run Tests in ${{ matrix.os }}, python ${{ matrix.python-version }}
+
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        python-version: ['3.10', '3.11.0-alpha - 3.11']
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@master
+    - name: Setup Python
+      uses: actions/setup-python@master
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    - name: Install Pip Dependecies
+      run: pip install -r requirements.txt
+    - name: Run Pytest
+      run: pytest
