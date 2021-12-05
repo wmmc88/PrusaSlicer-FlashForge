@@ -1,0 +1,16 @@
+name: pytest
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+  schedule: # Trigger a job on master at midnight UTC every day
+    - cron: '0 0 * * *'
+
+jobs:
+  pytest:
+    - name: GitHub Action for pytest
+      uses: cclauss/GitHub-Action-for-pytest@master
+      with:
+        args: pytest -h
