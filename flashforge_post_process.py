@@ -16,10 +16,28 @@ TRAVEL_SPEED_Z = float(os.environ['SLIC3R_TRAVEL_SPEED_Z']) * 60
 
 GCODE_LINE_REGEX = re.compile(
     r'\A(?P<line_prefix>[;:\s]*)'  # Commented Gcode lines need to be processed too because of FF firmware parsing
-    r'(?P<gcode>(\b[GMT]\d+(\.\d+)?\b)(\s+\b[XYZE]-?\d*\.?\d+\b)*(\s+\b[FST]\d*\.?\d+\b)*\s*)'
-    r'(?P<comment>;.*)?',
+    r'(?P<gcode>(\b[GMT]\d+(\.\d+)?\b)(\s+\b[XYZE]-?\d*\.?\d+\b)*(\s+\b[FST]\d*\.?\d+\b)*\s*?)'
+    r'(\s*(?P<comment>;.*))?'
+    r'(?P<line_suffix>\s*)',
     re.ASCII)
-M109_COMMAND_REGEX = re.compile(
+FFPP_PARSED_LINE_REGEX = re.compile(
+    r'\A;\s*\bFFPP-'
+    r'(?P<parsed_value_name>(\w*\b))'
+    r':\s*'
+    r'(?P<parsed_value>\b\d*.?\d*\b)'
+    r'(\s*(?P<comment>;.*))?'
+    r'(?P<line_suffix>\s*)',
+    re.ASCII)
+FFPP_SUBSTITUTION_LINE_REGEX = re.compile(
+    r'(?P<uncomment_prefix>\A;FFPP-UNCOMMENT;( )?)?'
+    r'(?P<line_prefix>.*)'
+    r'<FFPP-(?P<is_calculated_substitution>calculated-)?'
+    r'(?P<substitution_value_name>(\w*\b))>'
+    r'((?P<comment>\s*;.*))?'
+    r'(?P<line_suffix>\s*)',
+    re.ASCII)
+
+STANDARD_M109_COMMAND_REGEX = re.compile(
     r'\A\bM109\b\s+'
     r'(?P<temperature_param>\bS-?\d*\.?\d+\b)\s+'
     r'(?P<extruder_param>\bT\d+\b)',
@@ -33,21 +51,13 @@ G1_COMMAND_REGEX = re.compile(
     r'(?P<comment>;.*)?',
     re.ASCII)
 T_COMMAND_REGEX = re.compile(r'\A\bT\d+\b', re.ASCII)
+END_OF_TOOL_CHANGE_GCODE_REGEX = re.compile(
+    r'; \*\*\*\* End of Tool Change GCode:'
+    r'(?P<printer_model>.*)?'
+    r'\*\*\*\*',
+    re.ASCII
+)
 
-FFPP_PARSED_LINE_REGEX = re.compile(
-    r'\A;\s*\bFFPP-'
-    r'(?P<parsed_value_name>(\w*\b))'
-    r':\s*'
-    r'(?P<parsed_value>\b\d*.?\d*\b)'
-    r'(?P<comment>\s*;.*)?',
-    re.ASCII)
-FFPP_SUBSTITUTION_LINE_REGEX = re.compile(
-    r'(?P<uncomment_comment>\A;FFPP-UNCOMMENT;( )?)?'
-    r'(?P<line_prefix>.*)'
-    r'<FFPP-(?P<is_calculated_substitution>calculated-)?'
-    r'(?P<substitution_value_name>(\w*\b))>'
-    r'(?P<line_suffix>.*)',
-    re.ASCII)
 FFPP_PARSED_VALUES: Dict[str, List] = {}
 
 FLASHPRINT_FILE_NAME_LIMIT = 36
@@ -119,7 +129,7 @@ def substitute_ffpp_values(gcode: io.StringIO) -> io.StringIO:
                 content = first_val
 
             new_gcode.write(
-                f'{substitution_line_match.group("line_prefix")}{content}{substitution_line_match.group("line_suffix")}\n')
+                f'{substitution_line_match.group("line_prefix")}{content}{substitution_line_match.group("comment")}{substitution_line_match.group("line_suffix")}')
         else:
             new_gcode.write(line)
 
@@ -135,40 +145,61 @@ def replace_standard_m109_commands(gcode: io.StringIO) -> io.StringIO:
     new_gcode = io.StringIO()
 
     gcode.seek(0)
-    fix_next_G1_speed = False
     for line in gcode:
         line_written = False
         if valid_gcode_line_match := GCODE_LINE_REGEX.match(line):
             gcode_match_str = valid_gcode_line_match.group('gcode')
-            if M109_command_match := M109_COMMAND_REGEX.match(gcode_match_str):
+            if M109_command_match := STANDARD_M109_COMMAND_REGEX.match(gcode_match_str):
                 new_gcode.write(
-                    f'{valid_gcode_line_match.group("line_prefix")}M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature\n')
+                    f'{valid_gcode_line_match.group("line_prefix")}M104 {M109_command_match.group("temperature_param")} {M109_command_match.group("extruder_param")} ; set extruder temperature{valid_gcode_line_match.group("line_suffix")}')
                 new_gcode.write(
-                    f'{valid_gcode_line_match.group("line_prefix")}M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached\n')
+                    f'{valid_gcode_line_match.group("line_prefix")}M6 {M109_command_match.group("extruder_param")} ; wait for extruder temperature to be reached{valid_gcode_line_match.group("line_suffix")}')
                 line_written = True
-                fix_next_G1_speed = True
-            elif fix_next_G1_speed and (G1_command_match := G1_COMMAND_REGEX.match(gcode_match_str)):
-                if G1_command_match.group('f_param'):
-                    fix_next_G1_speed = False  # No need to fix next speed since it already has Feed Rate parameter
-                elif G1_command_match.group('xy_params') or G1_command_match.group('z_param'):
-                    if G1_command_match.group('xy_params'):
-                        travel_speed = TRAVEL_SPEED
-                    elif G1_command_match.group('z_param'):
-                        travel_speed = TRAVEL_SPEED_Z
-                    else:
-                        raise RuntimeError(
-                            'Error in G1_COMMAND_REGEX. Expected X, Y or Z command because of regex match'
-                            'groups, but could not find one.')
 
-                    if gcode_comment := valid_gcode_line_match.group("comment"):
-                        gcode_comment = f' {gcode_comment}'
-                    else:
-                        gcode_comment = ''
+        if not line_written:
+            new_gcode.write(line)
 
-                    new_gcode.write(
-                        f'{valid_gcode_line_match.group("line_prefix")}{valid_gcode_line_match.group("gcode")} F{travel_speed}{gcode_comment}\n')
-                    line_written = True
-                    fix_next_G1_speed = False
+    return new_gcode
+
+
+def force_explicit_g1_speed_after_toolchange(gcode: io.StringIO) -> io.StringIO:
+    '''
+    PrusaSlicer doesn't seem to put a speed for a G1 command after tool change, which can cause the new tool to move very
+    slowly on a FF printer. Explicitly enforce a G1 speed in the first G1 command after tool change
+    '''
+    new_gcode = io.StringIO()
+
+    gcode.seek(0)
+    fix_next_G1_speed = False
+    for line in gcode:
+        line_written = False
+
+        if END_OF_TOOL_CHANGE_GCODE_REGEX.match(line):
+            fix_next_G1_speed = True
+        elif fix_next_G1_speed and (valid_gcode_line_match := GCODE_LINE_REGEX.match(line)) and (
+                G1_command_match := G1_COMMAND_REGEX.match(valid_gcode_line_match.group('gcode'))):
+
+            if G1_command_match.group('f_param'):
+                fix_next_G1_speed = False  # No need to fix next speed since it already has Feed Rate parameter
+            elif G1_command_match.group('xy_params') or G1_command_match.group('z_param'):
+                if G1_command_match.group('xy_params'):
+                    travel_speed = TRAVEL_SPEED
+                elif G1_command_match.group('z_param'):
+                    travel_speed = TRAVEL_SPEED_Z
+                else:
+                    raise RuntimeError(
+                        'Error in G1_COMMAND_REGEX. Expected X, Y or Z command because of regex match'
+                        'groups, but could not find one.')
+
+                if gcode_comment := valid_gcode_line_match.group("comment"):
+                    gcode_comment = f' {gcode_comment}'
+                else:
+                    gcode_comment = ''
+
+                new_gcode.write(
+                    f'{valid_gcode_line_match.group("line_prefix")}{valid_gcode_line_match.group("gcode")} F{travel_speed}{gcode_comment}{valid_gcode_line_match.group("line_suffix")}')
+                line_written = True
+                fix_next_G1_speed = False
 
         if not line_written:
             new_gcode.write(line)
@@ -233,6 +264,7 @@ def main(input_file_path: Path):
             processed_gcode = parse_for_ffpp_values(processed_gcode)
             processed_gcode = substitute_ffpp_values(processed_gcode)
             processed_gcode = replace_standard_m109_commands(processed_gcode)
+            processed_gcode = force_explicit_g1_speed_after_toolchange(processed_gcode)
             processed_gcode = remove_useless_T_commands(processed_gcode)
             processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
 

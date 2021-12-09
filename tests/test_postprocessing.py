@@ -7,7 +7,7 @@ from pathlib import Path
 from importlib import reload
 
 
-@pytest.mark.parametrize('test_env', ['gcode_snippets', 'soluble_cube', 'benchy_PETG', 'left_benchy', 'right_benchy'], indirect=True)
+@pytest.mark.parametrize('test_env', ['gcode_snippets', 'soluble_cube', 'benchy_PETG', 'left_benchy', 'right_benchy', 'nozzle_switch_rod'], indirect=True)
 def test_postprocess_file(test_data_path, test_env):
     import flashforge_post_process
     reload(flashforge_post_process)

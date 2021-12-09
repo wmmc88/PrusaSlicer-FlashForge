@@ -4014,7 +4014,7 @@ G92 E0 ; reset extrusion distance
 ; **** End of Filament-Specific Start GCode: EconoFil PETG ****
 M104 S225 T0 ; set extruder temperature
 M6 T0 ; wait for extruder temperature to be reached
-G1 X4.364 Y17.76  F7800.0 ; move to first skirt point
+G1 X4.364 Y17.76 F7800.0 ; move to first skirt point
 G1 Z3.3 F420 ; restore layer Z
 G1 E10 F1800 ;  ; unretract
 ;TYPE:Skirt/Brim
@@ -6498,7 +6498,7 @@ G92 E0 ; reset extrusion distance
 ; **** End of Filament-Specific Start GCode: Aquatek PVA ****
 M104 S225 T1 ; set extruder temperature
 M6 T1 ; wait for extruder temperature to be reached
-G1 X-18.196 Y1.626  F7800.0 ; move to first skirt point
+G1 X-18.196 Y1.626 F7800.0 ; move to first skirt point
 G1 Z6.7 F420 ; restore layer Z
 G1 E10 F1800 ;  ; unretract
 ;TYPE:Skirt/Brim
@@ -6992,7 +6992,7 @@ G92 E0 ; reset extrusion distance
 ; **** End of Filament-Specific Start GCode: EconoFil PETG ****
 M104 S225 T0 ; set extruder temperature
 M6 T0 ; wait for extruder temperature to be reached
-G1 X-18.196 Y-.437  F7800.0 ; move to first skirt point
+G1 X-18.196 Y-.437 F7800.0 ; move to first skirt point
 G1 Z7.1 F420 ; restore layer Z
 G1 E10 F1800 ;  ; unretract
 ;TYPE:Skirt/Brim
