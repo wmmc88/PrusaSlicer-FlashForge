@@ -9,22 +9,32 @@ Export config Bundle
 ## FF C3 GCode
 
 ### G Codes
-G90: Absolute Positioning
-G1 X Y Z F: Move
+G1 X Y Z F ; Move
+G90 ; absolute positioning
+G91 ; relative positioning
+G92 E0 ; reset extrusion distance
+G162 Z F1800 ; Go to max Z position
 
 ### M Codes
-M118 X150.00 Y125.00 Z200.00 T[initial_extruder] ; todo: need to post process this
+M6 T0 ; wait for extruder temp
+M7 T0 ; wait for platform temp
+M18 ; disable steppers
+M104 S{first_layer_temperature[0]} T0 ; set right extruder temp
+M104 S{first_layer_temperature[1]} T1 ; set left extruder temp
+M106 ; Extruder/Heat Break fan on
+M107 ; Extruder/Heat Break fan off
+M108 T{initial_extruder} ; tool change
 M118 X150.00 Y125.00 Z200.00 T[initial_extruder] ; todo: need to post process this
 M140 S[first_layer_bed_temperature[initial_extruder]] T0; set bed temperature
-M104 S{first_layer_temperature[0]} T0; set right extruder temp
-M104 S{first_layer_temperature[1]} T1; set left extruder temp
-M108 T{initial_extruder} ; tool change
-M106 ; Extruder/Heat Break fan on
 M651 S[0-255]; chassis fan on
-
+M652 ; chassis fan off
 ### T Values
-T0: Right Extruder for M104, Bed for M140
-T1: Left Extruder for M104
+Extruder Commands:
+  * T0: Right Extruder
+  * T1: Left Extruder
+
+Bed Commands
+  * T0: Bed
 
 
 
