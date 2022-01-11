@@ -119,6 +119,7 @@ def substitute_ffpp_values(gcode: io.StringIO) -> io.StringIO:
                     case _:
                         raise NotImplementedError(f'Calculation of {substitution_value_name} is not implemented.')
             else:
+                # TODO: Deal with non-matching z offsets and missing values
                 first_val = FFPP_PARSED_VALUES[substitution_value_name][0]
                 for val in FFPP_PARSED_VALUES[substitution_value_name]:
                     # If a non-calculated value is parsed several times in the file, all the values must be the same
