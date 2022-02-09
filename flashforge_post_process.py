@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-
 import io
 import os
 import re
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO, Dict, List
+from typing import TextIO, Dict, List, Generic, TypeVar
 
 THIS_FILE_ABS_PATH = Path(__file__).resolve(strict=True)
 
@@ -58,13 +58,30 @@ END_OF_TOOL_CHANGE_GCODE_REGEX = re.compile(
     re.ASCII
 )
 
-FFPP_PARSED_VALUES: Dict[str, List] = {}
-
 FLASHPRINT_FILE_NAME_LIMIT = 36
 POST_PROCESSED_FILE_PREFIX = 'FFpp_'
 FAILED_PROCESSING_PREFIX = f'{POST_PROCESSED_FILE_PREFIX}FAILED_'
 
 PRUSASLICER_CONFIG_START_LINE_REGEX = re.compile(r'\A; prusaslicer_config = begin', re.ASCII)
+
+FFPP_PARSED_VALUES: Dict[str, List] = {}
+
+T = TypeVar('T')
+
+
+@dataclass
+class ParsedOption(Generic[T]):
+    option_value: T
+    option_source: str
+
+
+@dataclass
+class PostProcessingOptions:
+    z_offset: ParsedOption[float] = ParsedOption(option_value=0.0, option_source='Default Value')
+    bed_temperature: ParsedOption[float] = ParsedOption(option_value=0.0, option_source='Default Value')
+
+
+POST_PROCESSING_OPTIONS = PostProcessingOptions()
 
 
 def add_header(gcode: io.StringIO, input_file_path: Path) -> io.StringIO:
@@ -268,6 +285,8 @@ def main(input_file_path: Path):
             processed_gcode = force_explicit_g1_speed_after_toolchange(processed_gcode)
             processed_gcode = remove_useless_T_commands(processed_gcode)
             processed_gcode = disable_heating_if_extruder_unused(processed_gcode)
+
+            print(str())
 
             if is_processed_gcode_valid(processed_gcode):
                 gcode_file_path = DESTINATION_FILE_PATH.parent / (
